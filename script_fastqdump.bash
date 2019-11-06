@@ -16,7 +16,7 @@ SRR="SRR8795649 SRR8795651"
 # For each SRR accession, download the data :
 for x  in $SRR
 do
-fastq-dump $x -X 10 --split-files
+fastq-dump $x --split-files
 echo $x
 done 
 
