@@ -57,10 +57,16 @@ Pour le mapping et la quantification de scRNAseq, on utilise alevin
 -o : chemin du dossier d'output
 -tgMPap : le tableau de correspondance nom de transcrits - nom de gène
 
+On l'execute en nohub pour pouvoir faire autre chose à côté et que ca soit indépendant si ca crash
+#nohup ./SCRIPT & (on doit se situer à l'endroit du script)
 07/11/2019
 On cherche le nombre de cellules dans l'article
 - 2769 pour la condition WT whole brain (SRR8795649) 
 -	4194 pour APP/PS1 whole brain (SRR8795651)
 Avec alevin nous trouvons 7381 (418 de plus) cellules pour les deux conditions
 --> ils doivent aggréger les barre-codes plus facilement (ou peut-être n'ont pas traité les doublets de la même manière)
+
+
+ENSEMBL --> genome publiéq 
+  BioMart : ensembl gene, mouse genes
 
