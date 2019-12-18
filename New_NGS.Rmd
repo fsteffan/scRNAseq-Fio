@@ -1,0 +1,265 @@
+---
+title: "Nouveau_scRNAseq"
+output: html_document
+---
+## Install and load the libraries
+
+```{r pressure, echo=FALSE}
+
+
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#     install.packages("BiocManager")
+# BiocManager::install("scater")
+# BiocManager::install("tximport")
+# install.packages("mvoutlier")
+
+library(tximport)
+library(scater)
+library(ggplot2)
+library(reshape2)
+library(Seurat)
+library(dplyr)
+```
+
+## Load the data
+
+Take the raw counts. How many cells are found? How are the cells labelled?
+
+```{r , echo=FALSE}
+
+# Reading in the alevin quants quants
+# At the moment it is not possible to load several results of alevin at the same time with tximport nor tximeta
+# path to the output directory of Alevin run of pbmc_1k 10x V2 data
+
+alv_WT_quant <- file.path("/home/rstudio/disk/genome/alevin_WT_output/alevin/quants_mat.gz")
+file.exists(alv_WT_quant)
+alv_APP_quant <- file.path("/home/rstudio/disk/genome/alevin_APP_output/alevin/quants_mat.gz")
+file.exists(alv_APP_quant)
+
+# Reading in the alevin quants 
+txi_WT <- tximport(alv_WT_quant, type="alevin")
+txi_APP <- tximport(alv_APP_quant, type="alevin")
+
+rawDataWT=txi_WT$counts
+rawDataAPP=txi_APP$counts
+
+rawData=as.matrix(data.frame(cbind(rawDataWT,rawDataAPP)))
+cells=c(rep("WT",ncol(rawDataWT)),rep("APP/PS1",ncol(rawDataAPP)))
+
+
+##### Create metaData matrix (used for downstream analysis)
+metaData <- data.frame("cells"=colnames(rawData),
+       row.names="cells",stringsAsFactors=FALSE)
+
+### cell type
+metaData$orig.ident <- cells
+table(metaData$orig.ident)
+
+```
+
+
+###########################################################
+## Seurat pipeline for clustering cells 
+###########################################################
+
+After filtering low quality cells from the dataset,
+the filtered gene expression matrix will now be analysed in the seurat pipeline.
+ 
+Filtering and quality control during import of data:
+(1) Each cell should express a minimum of 200 genes (‘min.features’).
+(2) A gene should be expressed in a minimum of 3 cells (‘min.cells’).
+
+The data has to be stored in a Seurat object = complex data type with slots that store the raw data, and the results from every step in the pipeline. So you do not need to keep track of many individual variables but they are all collapsed into one single Seurat object.
+
+Seurat objects consist of a set of cells and one or more assays objects, individual sets of count data. Assays can be reduced from their high-dimensional state to a lower-dimension state and stored as DimReduc objects. Seurat objects also store meta data.
+
+Slots are accessible via @sign.
+
+```{r}
+
+# CreateSeuratObject() of Seurat package
+# counts: input data
+# min.cells: remove genes expressed in less than this many cells. 
+# min.features: remove cells with less than this many genes expressed.
+# project: name of Seurat object
+seuratObj <- CreateSeuratObject(counts=rawData,project="seuratObj",min.cells=3,min.features=200,meta.data=metaData)
+
+### Explore object: more details on the slides.
+# Seurat objects consist of one or more assays objects
+# representing expression data
+seuratObj@assays
+
+# The counts are in the RNA object
+dim(seuratObj@assays$RNA)
+# many genes removed - no additional cells removed
+
+# Access the data
+# Seurat object < assays slot 
+# assays object < RNA object 
+# RNA object < counts slot
+# Obtain the first 5 rows (genes) and columns (cells)
+seuratObj@assays$RNA@counts[1:5,1:5]
+
+table(seuratObj@meta.data$orig.ident)
+
+```
+
+We calculate mitochondrial QC metrics with the PercentageFeatureSet function, which calculates the percentage of counts originating from a set of features
+We use the set of all genes starting with 'mt-' as a set of mitochondrial genes
+
+
+We filter cells that have unique feature counts over 2,500 or less than 200
+We filter cells that have >5% mitochondrial counts
+
+*SEURAT*
+Seurat redonne les opérations précédentes
+Seurat allows you to easily explore QC metrics and filter cells based on any user-defined criteria. A few QC metrics commonly used by the community include
+
+The number of unique genes detected in each cell.
+Low-quality cells or empty droplets will often have very few genes
+Cell doublets or multiplets may exhibit an aberrantly high gene count
+Similarly, the total number of molecules detected within a cell (correlates strongly with unique genes)
+The percentage of reads that map to the mitochondrial genome
+Low-quality / dying cells often exhibit extensive mitochondrial contamination
+We calculate mitochondrial QC metrics with the PercentageFeatureSet function, which calculates the percentage of counts originating from a set of features
+We use the set of all genes starting with mt- as a set of mitochondrial genes.
+
+On crée une matrice double
+
+```{r}
+
+# The [[ operator can add columns to object metadata. This is a great place to stash QC stats
+#analyse des gènes mitochondriaux
+seuratObj[["percent.mt"]] <- PercentageFeatureSet(seuratObj, pattern = "^mt-")
+summary(seuratObj[["percent.mt"]])
+
+#ensuite on sélectionne donc les cellules qu'on doit retirer
+#remarque: il y a plusieurs critères de mauvaise qualité => on aurait pu faire une PCA et regarder si ces critères correspondent au même groupe de cellules. 
+#remarque 2: il faudrait prendre le temps de jouer avec les features
+
+seuratObj <- subset(seuratObj, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 10)
+#et on revisualise: 
+VlnPlot(seuratObj_refine, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size=0)
+plot1 <- FeatureScatter(seuratObj_refine, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(seuratObj_refine, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+CombinePlots(plots = list(plot1, plot2))
+
+
+```
+
+#Normalisation
+
+Ensuite on normalise les niveaux d'expression de gènes d'une cellule par rapport aux autres gènes de la cellule:
+"we employ a global-scaling normalization method “LogNormalize” that normalizes the feature expression measurements for each cell by the total expression, multiplies this by a scale factor (10,000 by default), and log-transforms the result"
+On utilise une échele log car les variations entre les expressions des gènes sont tres importantes. 
+On passe en ratio car on efface les différences entre des pb, par exemple si une cellule est très faible (pas bpc de réactifs...) on récupère le ratio. 
+Attention il y a un biais important !! si un gène est très exprimé et change entre les cellules, alors la somme totale des gènes de chaque cellule sera affectée ! Pour du bulk-RNA seq il aurait fallu faire une somme "médiane" pour outrepasser ce biais. Nous on ne peut pas car on a que des 0 si on fait un échantillon médian ! et ce sera pareil pour des gènes différentiellement exprimés. Mais le field va progresser.
+
+```{r}
+seuratObj <- NormalizeData(seuratObj, normalization.method = "LogNormalize", scale.factor = 10000)
+#j'aurai pu ne pas changer de nom, ca aurait créé moins d'objet inutile, surtout que là il rajoute juste des cases dans notre matrice existante.
+#visualisation: on ne peut pas faire le violin plot avec ça, il ne prend pas en entrée ce type de données. 
+seuratObj@assays$RNA@counts[1:5,1:2] #visualisation des counts
+seuratObj@assays$RNA@data[1:5,1:2] #visualtisation quand normalisé
+summary(seuratObj@assays$RNA@data[,1])
+table(seuratObj@assays$RNA@counts[,1]>0) # pour voir que la plupart des gènes ne sont pas exprimés, on a bcp de zéros
+
+#en séparant les deux: 
+seurat_WT <- NormalizeData(seurat_WT, normalization.method = "LogNormalize", scale.factor = 10000)
+seurat_APP <- NormalizeData(seurat_APP, normalization.method = "LogNormalize", scale.factor = 10000)
+```
+
+
+On va ensuite s'interesser aux high variable features, qui sont des gènes particulièrement variables entre les cellules.
+
+## VariableFeatures
+
+
+```{r cars}
+seuratObj <- FindVariableFeatures(object=seuratObj, selection.method="vst",nfeatures=2000)
+cat("Found",length(VariableFeatures(seuratObj)),"high variable genes\n")
+top10<- head(VariableFeatures(seuratObj),10)
+top10
+#scaling
+all.genes <- rownames(seuratObj)
+seuratObj <- ScaleData(seuratObj, features = all.genes)
+seuratObj <- RunPCA(seuratObj, features=VariableFeatures(object=seuratObj))
+#visualisation de notre PCA:
+print(seuratObj[["pca"]], dims=1:5, nfeatures=5)
+DimPlot(seuratObj, reduction = "pca")
+
+#On doit déterminer quelles sont les composents informatifs de la PCA. =déterminer la dimensionalité. Pour cela :
+seuratObj<- JackStraw(seuratObj, num.replicate = 100)
+seuratObj <- ScoreJackStraw(seuratObj, dims = 1:20)
+JackStrawPlot(seuratObj, dims = 1:15)
+ElbowPlot(seuratObj)
+#on sélectionne les 15 premières PC (principal component) pour la suite de l'analyse. 
+#clustering: on utilise l'algorythme findneigbours
+seuratObj <- FindNeighbors(seuratObj, dims = 1:20)
+seuratObj <- FindClusters(seuratObj, resolution = 0.4)
+#avec cette résolution on trouve 16 cluster parmis nos cellules. r=C'est la perplexité. Avec une résolution = perplexité de 1 on en avait 22.
+#ppour les voir un peu:
+head(Idents(seuratObj),5)
+```
+Explications:
+PCA: trouver des axes qui permettent de décrire les données en 2D. Grandes dimensions permettant d'expliquer les différences entre les cellules. D'habitude on regarde que 1 et 2 mais ici on aimerait utiliser ces axes de PCA pour le UMAP. On veut savoir combien. Donne explicabilité des resultats.
+Elbow: pourcentage de variance expliqué par chacun des axes. Quand ca devient proche de 0, ca n'explique plus la différence.
+NB: c'est bien les axes d'APC qu'on utiliqe pour faire les clusters. Ca donne des statistiques. Pourquoi? PCA moins visuelle, n'éclate pas les choses, on reste en gradients. tSNE: bonne visualisation des groupes mais pour définir les clusters on doit utiliser les PCA axes. 
+On calcule la distance en tre chauqe cellule et on regroupe les cellules qui ont (plus ou moins) les mêmes voisins
+```{r}
+#visualisation en t-SNE
+seuratObj <- RunUMAP(seuratObj, dims = 1:15)
+DimPlot(seuratObj, reduction="umap")
+seuratObj <-RunTSNE(seuratObj,dims=1:15)
+DimPlot(seuratObj, reduction="tsne")
+
+#en dégroupant <wt et app
+DimPlot(seuratObj, reduction="tsne",group.by="orig.ident")
+
+
+
+
+```
+
+```{r}
+
+#On cherche les markers du cluster 12 qui a l'air unique au WT et le 3 qui a l'air unique au APP
+cluster12.markers <- FindMarkers(seuratObj, ident.1 = 12, min.pct = 0.25)
+head(cluster12.markers, n = 10)
+cluster3.markers <- FindMarkers(seuratObj, ident.1 = 3, min.pct = 0.25)
+head(cluster3.markers, n = 100)
+
+# find markers for every cluster compared to all remaining cells, report only the positive ones
+seuratObj.markers <- FindAllMarkers(seuratObj, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+seuratObj.markers  %>% group_by(cluster) %>% top_n(n = 4, wt = avg_logFC)
+grep(x=all.genes, "Cd11c")
+all.genes[5112]
+all.genes[12561]
+all.genes[1880]
+all.genes[11740]
+Features(seuratObj)
+VlnPlot(seuratObj, features = c("Ly6c2", "Cd3e"))
+VlnPlot(seuratObj, features = "Tmem199")
+
+#genes propres au groupe 12
+FeaturePlot(seuratObj, reduction ="tsne", features = c("Ngp", "Camp", "S100a8", "S100a9"))
+FeaturePlot(seuratObj, reduction ="tsne", features = "Cd4")
+
+#marqueur CD8
+FeaturePlot(seuratObj, reduction ="tsne", features = c("Cd8b1","Cd8a"), split.by="orig.ident")
+#marqueur cellules naive et memry B cells
+FeaturePlot(seuratObj, reduction ="tsne", features = c("Ccr7", "Cd19"), split.by="orig.ident")
+#marqueur NK cells
+FeaturePlot(seuratObj, reduction ="tsne", features= "Klrb1c", split.by="orig.ident")
+#marqueur microglia
+FeaturePlot(seuratObj, reduction ="tsne", features= c("Cd8a","Tmem119"), split.by="orig.ident")
+#marqueur BAM
+FeaturePlot(seuratObj, reduction ="tsne", features= c("Fcrls","Tmem119","Sall1"), split.by="orig.ident")
+#marqueur dam
+#genes propres au groupe 3
+FeaturePlot(seuratObj, reduction ="tsne", features = c("Cst7", "Apoe", "Lpl", "Spp1"))
+#genes propres au monocytes
+FeaturePlot(seuratObj, reduction ="tsne", features= "Cd11c", split.by="orig.ident")
+
+
+```
