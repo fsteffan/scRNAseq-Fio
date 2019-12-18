@@ -241,7 +241,7 @@ Features(seuratObj)
 VlnPlot(seuratObj, features = c("Ly6c2", "Cd3e"))
 VlnPlot(seuratObj, features = "Tmem199")
 
-#genes propres au groupe 12
+#genes propres au groupe 12 #le groupe 12 a été modifié car on a pas les mêmes custering aujourd'hui
 FeaturePlot(seuratObj, reduction ="tsne", features = c("Ngp", "Camp", "S100a8", "S100a9"))
 FeaturePlot(seuratObj, reduction ="tsne", features = "Cd4")
 
