@@ -20,6 +20,11 @@ library(tximport)
 
 
 # path to the output directory of Alevin run of pbmc_1k 10x V2 data
+# On avait d'abord analysé alevin sur les deux conditions
+alv <- file.path("/home/rstudio/disk/genome/alevin_output/alevin/quants_mat.gz")
+file.exists(alv_WT_quant)
+
+# On recommence en séparant les conditions
 alv_WT_quant <- file.path("/home/rstudio/disk/genome/alevin_WT_output/alevin/quants_mat.gz")
 file.exists(alv_WT_quant)
 alv_APP_quant <- file.path("/home/rstudio/disk/genome/alevin_APP_output/alevin/quants_mat.gz")
@@ -47,16 +52,22 @@ Cell doublets or multiplets may exhibit an aberrantly high gene count
 Low-quality / dying cells often exhibit extensive mitochondrial contamination
 
 ```{r}
-countUMIcell <- apply(alv$counts,2,sum)
-hist(countUMIcell, breaks=1000, xlim=range(0,10000))
-countgenecell <- colSums(alv$counts !=0)
-hist(countgenecell, breaks=7000)
+#On l'avait fait pour l'ancien fichier qui avait importé le alevin effectué sur les deux 
+countUMIcell_WT <- apply(txi_WT$counts,2,sum)
+hist(countUMIcell_WT, breaks=1000, xlim=range(0,10000))
+countgenecell_WT <- colSums(txi_WT$counts !=0)
+hist(countgenecell_WT, breaks=7000)
+
+countUMIcell_APP <- apply(txi_APP$counts,2,sum)
+hist(countUMIcell_APP, breaks=1000, xlim=range(0,10000))
+countgenecell_APP <- colSums(txi_APP$counts !=0)
+hist(countgenecell_APP, breaks=7000)
 
 ```
 
 
 ```{r}
-#on crée la lsit des gènes
+#on crée la liste des gènes sur le fichier contenant les deux conditions mélangées
 listgenes <- rownames(alv$counts)
 #on crée la lsite des gènes mitochondriaux
 g<-grep("mt-",listgenes)
@@ -73,6 +84,7 @@ We use the set of all genes starting with 'mt-' as a set of mitochondrial genes
 
 We filter cells that have unique feature counts over 2,500 or less than 200
 We filter cells that have >5% mitochondrial counts
+
 
 *SEURAT*
 Seurat redonne les opérations précédentes
@@ -93,19 +105,13 @@ On crée une matrice double
 library(dplyr)
 library(Seurat)
 
-
-combine_seurat=as.matrix(data.frame(cbind(txi_WT$counts,txi_APP$counts)))
-cells=as.data.frame(c(rep("WT",ncol(txi_WT$counts)),rep("APP",ncol(txi_APP$counts))))
-names(cells)="jeu"
-row.names(cells)=c(colnames(combine_seurat))
-cells
-
 seuratobj <- CreateSeuratObject(counts = combine_seurat, project = "seuratTPscRNAseq", min.cells = 3, min.features = 200, meta.data=cells)
 seuratobj
 
 #en séparant les conditions
 seurat_WT <-CreateSeuratObject(counts = txi_WT$counts, project = "seuratTPscRNAseq", min.cells = 3, min.features = 200)
 seurat_APP <-CreateSeuratObject(counts = txi_APP$counts, project = "seuratTPscRNAseq", min.cells = 3, min.features = 200)
+
 # The [[ operator can add columns to object metadata. This is a great place to stash QC stats
 #analyse des gènes mitochondriaux
 seuratobj[["percent.mt"]] <- PercentageFeatureSet(seuratobj, pattern = "^mt-")
@@ -116,24 +122,51 @@ seurat_WT[["percent.mt"]] <- PercentageFeatureSet(seurat_WT, pattern = "^mt-")
 summary(seurat_WT[["percent.mt"]])
 seurat_APP[["percent.mt"]] <- PercentageFeatureSet(seurat_APP, pattern = "^mt-")
 summary(seurat_APP[["percent.mt"]])
+
+
+```
+
+On nettoye les données comme précédemment expliqué. On ne garde que les cellules avec un taux d'expressions des gènes mitochondriaux raisonnable (5-10%) et un nombre de transcrit compris entre 200 et 2500L
+
+```{r}
+#ensuite on sélectionne donc les cellules qu'on doit retirer
+#remarque: il y a plusieurs critères de mauvaise qualité => on aurait pu faire une PCA et regarder si ces critères correspondent au même groupe de cellules. 
+#remarque 2: il faudrait prendre le temps de jouer avec les features
+
+seurat_WT <- subset(seurat_WT, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 10)
+#et on revisualise: 
+VlnPlot(seurat_WT, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size=0)
+plot1 <- FeatureScatter(seurat_WT, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(seurat_WT, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+CombinePlots(plots = list(plot1, plot2))
+
+seurat_APP <- subset(seurat_APP, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 10)
+#et on revisualise: 
+VlnPlot(seurat_APP, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size=0)
+plot1A <- FeatureScatter(seurat_APP, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2A <- FeatureScatter(seurat_APP, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+CombinePlots(plots = list(plot1A, plot2A))
 ```
 
 Ensuite on normalise les niveaux d'expression de gènes d'une cellule par rapport aux autres gènes de la cellule:
 "we employ a global-scaling normalization method “LogNormalize” that normalizes the feature expression measurements for each cell by the total expression, multiplies this by a scale factor (10,000 by default), and log-transforms the result"
 On utilise une échele log car les variations entre les expressions des gènes sont tres importantes. 
+--> norm=log(1+ nb of read/ sum of all the reads)*10000
 On passe en ratio car on efface les différences entre des pb, par exemple si une cellule est très faible (pas bpc de réactifs...) on récupère le ratio. 
 Attention il y a un biais important !! si un gène est très exprimé et change entre les cellules, alors la somme totale des gènes de chaque cellule sera affectée ! Pour du bulk-RNA seq il aurait fallu faire une somme "médiane" pour outrepasser ce biais. Nous on ne peut pas car on a que des 0 si on fait un échantillon médian ! et ce sera pareil pour des gènes différentiellement exprimés. Mais le field va progresser.
 
 ```{r}
+#Ceci est l'objet initial où les deux conditions étaient mélangées
 seuratobj_norm <- NormalizeData(seuratobj_refine, normalization.method = "LogNormalize", scale.factor = 10000)
 #j'aurai pu ne pas changer de nom, ca aurait créé moins d'objet inutile, surtout que là il rajoute juste des cases dans notre matrice existante.
+#--> norm= log(1 + nb of read/ sum of all the reads)*10000
 #visualisation: on ne peut pas faire le violin plot avec ça, il ne prend pas en entrée ce type de données. 
 seuratobj_norm@assays$RNA@counts[1:5,1:2] #visualisation des counts
 seuratobj_norm@assays$RNA@data[1:5,1:2] #visualtisation quand normalisé
 summary(seuratobj_norm@assays$RNA@data[,1])
 table(seuratobj_norm@assays$RNA@counts[,1]>0) # pour voir que la plupart des gènes ne sont pas exprimés, on a bcp de zéros
 
-#en séparant les deux: 
+#en séparant les deux conditions: 
 seurat_WT <- NormalizeData(seurat_WT, normalization.method = "LogNormalize", scale.factor = 10000)
 seurat_APP <- NormalizeData(seurat_APP, normalization.method = "LogNormalize", scale.factor = 10000)
 ```
@@ -192,6 +225,16 @@ VizDimLoadings(seurat_APP, dims = 1:2, reduction = "pca")
 DimPlot(seurat_WT, reduction = "pca")
 DimPlot(seurat_APP, reduction = "pca")
 
+```
 
+On essaye de créer l'objet Seurat combinant les deux conditions.
+On continue sur l'ordinateur de Marie.
+```{r}
+
+combine_seurat=as.matrix(data.frame(cbind(txi_WT$counts,txi_APP$counts)))
+cells=as.data.frame(c(rep("WT",ncol(txi_WT$counts)),rep("APP",ncol(txi_APP$counts))))
+names(cells)="jeu"
+row.names(cells)=c(colnames(combine_seurat))
+cells
 ```
 

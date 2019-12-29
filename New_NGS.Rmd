@@ -1,7 +1,10 @@
 ---
-title: "Nouveau_scRNAseq"
+title: "Analyse de scRNAseq, deuxième version"
 output: html_document
 ---
+###### On a combiné notre ancien code avec celui qu'on avait écrit sur l'ordinateur de Marie
+
+
 ## Install and load the libraries
 
 ```{r pressure, echo=FALSE}
@@ -26,7 +29,6 @@ library(dplyr)
 Take the raw counts. How many cells are found? How are the cells labelled?
 
 ```{r , echo=FALSE}
-
 # Reading in the alevin quants quants
 # At the moment it is not possible to load several results of alevin at the same time with tximport nor tximeta
 # path to the output directory of Alevin run of pbmc_1k 10x V2 data
@@ -188,36 +190,36 @@ seuratObj <- RunPCA(seuratObj, features=VariableFeatures(object=seuratObj))
 print(seuratObj[["pca"]], dims=1:5, nfeatures=5)
 DimPlot(seuratObj, reduction = "pca")
 
+```
+Explications:
+PCA: trouver des axes qui permettent de décrire les données en 2D. Grandes dimensions permettant d'expliquer les différences entre les cellules. D'habitude on regarde que 1 et 2 mais ici on aimerait utiliser ces axes de PCA pour le UMAP. On veut savoir combien. Donne explicabilité des resultats.
+Elbow: pourcentage de variance expliqué par chacun des axes. Quand ca devient proche de 0, ca n'explique plus la différence.
+NB: c'est bien les axes d'APC qu'on utiliqe pour faire les clusters. Ca donne des statistiques. Pourquoi? PCA moins visuelle, n'éclate pas les choses, on reste en gradients. tSNE: bonne visualisation des groupes mais pour définir les clusters on doit utiliser les PCA axes. 
+On calcule la distance enntre chauqe cellule et on regroupe les cellules qui ont (plus ou moins) les mêmes voisins
+```{r}
 #On doit déterminer quelles sont les composents informatifs de la PCA. =déterminer la dimensionalité. Pour cela :
 seuratObj<- JackStraw(seuratObj, num.replicate = 100)
 seuratObj <- ScoreJackStraw(seuratObj, dims = 1:20)
 JackStrawPlot(seuratObj, dims = 1:15)
 ElbowPlot(seuratObj)
 #on sélectionne les 15 premières PC (principal component) pour la suite de l'analyse. 
+
 #clustering: on utilise l'algorythme findneigbours
 seuratObj <- FindNeighbors(seuratObj, dims = 1:20)
 seuratObj <- FindClusters(seuratObj, resolution = 0.4)
 #avec cette résolution on trouve 16 cluster parmis nos cellules. r=C'est la perplexité. Avec une résolution = perplexité de 1 on en avait 22.
 #ppour les voir un peu:
 head(Idents(seuratObj),5)
-```
-Explications:
-PCA: trouver des axes qui permettent de décrire les données en 2D. Grandes dimensions permettant d'expliquer les différences entre les cellules. D'habitude on regarde que 1 et 2 mais ici on aimerait utiliser ces axes de PCA pour le UMAP. On veut savoir combien. Donne explicabilité des resultats.
-Elbow: pourcentage de variance expliqué par chacun des axes. Quand ca devient proche de 0, ca n'explique plus la différence.
-NB: c'est bien les axes d'APC qu'on utiliqe pour faire les clusters. Ca donne des statistiques. Pourquoi? PCA moins visuelle, n'éclate pas les choses, on reste en gradients. tSNE: bonne visualisation des groupes mais pour définir les clusters on doit utiliser les PCA axes. 
-On calcule la distance en tre chauqe cellule et on regroupe les cellules qui ont (plus ou moins) les mêmes voisins
-```{r}
+
+
 #visualisation en t-SNE
 seuratObj <- RunUMAP(seuratObj, dims = 1:15)
 DimPlot(seuratObj, reduction="umap")
 seuratObj <-RunTSNE(seuratObj,dims=1:15)
 DimPlot(seuratObj, reduction="tsne")
 
-#en dégroupant <wt et app
+#en dégroupant wt et app
 DimPlot(seuratObj, reduction="tsne",group.by="orig.ident")
-
-
-
 
 ```
 
@@ -232,11 +234,10 @@ head(cluster3.markers, n = 100)
 # find markers for every cluster compared to all remaining cells, report only the positive ones
 seuratObj.markers <- FindAllMarkers(seuratObj, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
 seuratObj.markers  %>% group_by(cluster) %>% top_n(n = 4, wt = avg_logFC)
+
 grep(x=all.genes, "Cd11c")
 all.genes[5112]
-all.genes[12561]
-all.genes[1880]
-all.genes[11740]
+
 Features(seuratObj)
 VlnPlot(seuratObj, features = c("Ly6c2", "Cd3e"))
 VlnPlot(seuratObj, features = "Tmem199")
